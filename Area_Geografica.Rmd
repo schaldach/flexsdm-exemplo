@@ -1,0 +1,56 @@
+# Area_Geografica.Rmd
+
+Este código tem a utilidade de ajudar você a criar um polígono no formato shapefile (.shp) para delimitar a área de estudo que será abordada nos HSMs. Sinta-se livre para pular esse código caso você já possua uma pasta com o arquivo .shp correto (Lembre-se de colocá-la dentro da pasta `data/geo`)
+
+A única etapa que você precisa modificar, se for seguir a mesma metodologia para criar um polígono, é o começo da Seção 2., para fornecer as longitudes e latitudes das vértices do polígono.
+
+# 1. SETUP
+
+```{r}
+if(!require(pacman)) {
+  install.packages("pacman", dependencies = TRUE);
+}
+library(pacman)
+######> Instalando e carregando pacotes
+p_load(tidyverse, tidyr, terra, viridis, sf, ggplot2, 
+       rnaturalearth, rnaturalearthdata)
+
+######> Multi-polígono dos continentes
+world <- ne_countries(scale = "medium", type="countries", returnclass = "sf")
+```
+
+# 2. POLÍGONO
+
+Construindo polígono que definimos da área do Atlântico Sudoeste
+
+Essa é a única parte que você irá modificar: Forneça as longitudes e latitudes de todas as vértices do polígono (não esqueça de repetir a mesma longitude e latitude do começo no final, para criar um polígono fechado)
+
+```{r}
+######> Longitudes das vértices
+longitudes <- c(-70, -20, -20, -25, -25, -70, -70)
+
+######> Latitudes das vértices
+latitudes <- c(-60, -60, -5, -5, 0, 0, -60)
+```
+
+```{r}
+######> Unindo as coordenadas em uma única lista
+poly_coords <- list(cbind(longitudes, latitudes))
+
+######> Construindo o polígono com a projeção espacial padrão "4326"
+atlc_sudoeste_poly <- st_sfc(st_polygon(poly_coords), crs = 4326)
+
+######> Salvando o polígono
+dir_name <- "data/geo/atlantico_sudoeste"
+dir.create(dir_name)
+st_write(atlc_sudoeste_poly, paste0(dir_name, "/atlc_sudoeste.shp"))
+```
+
+```{r}
+######> Visualizando polígono
+ggplot() +
+  ggtitle("Katsuwonus pelamis - Ocorrências globais, antes de serem filtradas") +
+  geom_sf(data = world) +
+  geom_sf(data = atlc_sudoeste_poly, fill = NA, color = "yellow", linewidth = 1) +
+  coord_sf(xlim = st_bbox(atlc_sudoeste_poly)[c("xmin", "xmax")], ylim = st_bbox(atlc_sudoeste_poly)[c("ymin", "ymax")])
+```

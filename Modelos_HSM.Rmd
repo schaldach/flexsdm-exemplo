@@ -1,0 +1,707 @@
+# Modelos_HSM.Rmd
+
+Este é o código principal para criar os Modelos de Adequação de Habitat, usando os dados geográficos (para delimitar a área de estudo), de ocorrência e variáveis ambientais. Certifique-se de que você já seguiu as etapas 1, 2 e 3 delimitadas no `README.md` principal para ter todos os dados necessários organizados na pasta. 
+
+Você deve ter uma pasta contendo o arquivo shapefile que irá delimitar a área de estudo, os rasters com todas as variáveis ambientais em layers com o mesmo nome, e o arquivo de ocorrências produzido no código `Ocorrencias_Tratamento.Rmd` padronizado com as colunas "x" para longitude e "y" para latitude.
+
+# 1. SETUP
+
+```{r}
+if(!require(pacman)) {
+  install.packages("pacman", dependencies = TRUE);
+}
+library(pacman)
+######> Instalando e carregando pacotes
+p_load(terra, sf, tidyr, dplyr, remotes, viridis, ggcorrplot, RColorBrewer, leaflet,
+       rnaturalearth, rnaturalearthdata, usdm, scales, ggplot2, tidyterra, pROC, patchwork)
+
+######> Instalando biblioteca do github
+remotes::install_github("sjevelazco/flexsdm") 
+library(flexsdm)
+
+######> Lembre-se de executar, antes, os scripts necessários
+# source("Ocorrencias_Tratamento.R")
+# source("Ambientais_Tratamento.R") 
+```
+
+## 1.1 Definindo Variáveis
+
+É importante se certificar de que todas essas variáveis correspondem aos dados que você usará para construir os modelos.
+
+```{r}
+######> Caminho para o .csv de ocorrências único
+occurrences_csv_path <- "data/ocorrencias/occurrences_sardinella.csv"
+
+######> Caminho do arquivo shapefile
+sf_path <- "data/geo/area0_200/area0_200.shp"
+
+######> Nome da espécie (para plots)
+species_name <- "Sardinella brasiliensis"
+species_name_formatted <- gsub(" ", "_", species_name)
+
+######> Largura da área de calibração, em metros
+calib_area_width_meters <- 150000
+
+######> Número de semente aleatória (é preciso chamar set.seed() antes de cada função aleatória do flexsdm)
+random_seed <- 9
+
+######> Definir se os modelos feitos serão salvos na pasta ou não
+write_files <- TRUE
+
+######> Plotando predições com pontos de ocorrência (TRUE) ou não (FALSE)
+occ_points <- FALSE
+```
+
+## 1.2 Polígonos
+
+```{r}
+######> Carregando polígono da costa brasileira 
+mask_polygon <- read_sf(sf_path) 
+
+######> Polígono do mundo, para plots do oceano
+world <- ne_countries(scale = "medium", type="countries", returnclass = "sf")
+
+######> Visualizando área de estudo
+plot(world$geometry, col="white", bg = "skyblue", axes = TRUE, graticule = TRUE, xlab = "Longitude", ylab = "Latitude", xlim = st_bbox(mask_polygon)[c("xmin", "xmax")], ylim = st_bbox(mask_polygon)[c("ymin", "ymax")], main = "Atlantic ocean and Atlantic coast polygon")
+plot(mask_polygon$geometry, col=alpha("yellow", 0.5), border = 'red', add=TRUE)
+```
+
+```{r}
+######> Função para plot do terra com parâmetros padrões
+terra_plot <- function(r, unit="", occ_points = FALSE, palette = c(), continent_color = "white", ...){
+  if(length(palette) > 0){
+    original_palette <- getOption("terra.pal")
+    options(terra.pal = palette)
+  }
+
+  ######> Plot do raster
+  terra::plot(r, xlab = "Longitude", ylab = "Latitude", cex.lab=1.5, plg = list(cex = 1.35, title = unit), pax = list(cex.axis = 1.5), mar=c(3, 3, 2, 5), colNA = "lightblue", ...)
+  ######> Plot do continente
+  plot(world, add = TRUE, col = continent_color, border = "black")
+  ######> Plot da grid
+  # terra::plot(graticule(lon=5, lat=5, crs="EPSG:4326"), add = TRUE, col=alpha("black", 0.125))
+
+  if(occ_points){
+    points(occurrences, pch = 1, col = alpha("red", 0.2))
+  }
+  if(length(palette) > 0){
+    options(terra.pal = original_palette)
+  }
+}
+
+######> Função para cortar raster no formato de um shapefile
+mask_trim_raster <- function(raster1, shapefile) {
+  ######> Fazendo crop da área do shapefile
+  raster1_crop <- terra::mask(raster1, shapefile)
+  ######> Retirando colunas e linhas com apenas "NA"
+  raster1_crop <- terra::trim(raster1_crop)  
+  raster1_crop
+}
+```
+
+# 2. CARREGANDO DADOS
+
+## 2.1 Carregando e visualizando dados de ocorrência
+
+```{r}
+######> Carregando dataframe de ocorrência
+occurrences <- read.csv(occurrences_csv_path)
+str(occurrences)
+table(occurrences$source)
+
+######> Valor de presença, vai ser usado pelo flexsdm
+occurrences$pr_ab <- 1
+######> Apenas colunas necessárias
+occurrences <- occurrences %>%
+  select(x, y, pr_ab)
+
+######> Visualizando ocorrências no leaflet
+leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(data = occurrences, lng = ~x, lat = ~y, radius = 1,
+                   color = "red", fillOpacity = 0.5, stroke = FALSE,
+                   clusterOptions = markerClusterOptions())
+```
+
+## 2.2 Carregando e visualizando dados ambientais
+
+```{r}
+######> Carregando raster .tif dos dados ambientais baseline
+env_variables <- terra::rast("data/ambientais/env_variables_baseline_2010_2020.tif")
+names(env_variables)
+
+######> Renomeando variáveis (certifique-se que os nomes das variáveis estão na ordem correta encontrada em "names")
+all_variables_renamed <- c("Ocean_Temperature", "Dissolved_Molecular_Oxygen", "Phosphate", "Salinity", "Chlorophyll", "Mixed_Layer_Depth", "Total_Phytoplankton", "Dissolved_Iron", "pH", "Nitrate", "Silicate", "Sea_Water_Speed", "Sea_Water_Direction", "Eastward_Velocity", "Northward_Velocity")
+names(env_variables) <- all_variables_renamed
+
+######> Cropar o raster para a área de estudo (função própria)
+env_variables <- mask_trim_raster(env_variables, mask_polygon)
+
+######> Visualizando variáveis ambientais
+for(variable in all_variables_renamed) {
+  terra_plot(env_variables[[variable]], main = paste0(variable, " - Baseline - 2010-2020"))
+}
+```
+
+## 2.3 Escolhendo variáveis ambientais
+
+```{r}
+######> Plots para correlação
+env_variables_df <- as.data.frame(env_variables, na.rm=TRUE)
+str(env_variables_df)
+
+mat <- cor(env_variables_df)
+round(mat, digits = 3)
+p_mat <- cor_pmat(env_variables_df)
+
+p03 <- ggcorrplot(mat, method = "square", lab = TRUE, p.mat = p_mat,
+                  type = "lower") +
+   theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "top")
+p03
+```
+
+```{r}
+######> Investigando a colinearidade (Variance Inflation Factor) para escolher as variáveis a serem usadas
+vif(env_variables[[c("Ocean_Temperature", "Dissolved_Molecular_Oxygen", "Phosphate", "Salinity", "Chlorophyll", "Mixed_Layer_Depth",  "Dissolved_Iron", "pH", "Nitrate", "Silicate", "Sea_Water_Speed", "Sea_Water_Direction", "Eastward_Velocity", "Northward_Velocity")]])
+
+######> "Ocean_Temperature" e "Dissolved_Molecular_Oxygen" são altamente correlacionados
+vif(env_variables[[c("Ocean_Temperature", "Chlorophyll", "Mixed_Layer_Depth", "Salinity", "Eastward_Velocity", "Northward_Velocity", "Dissolved_Molecular_Oxygen")]])
+
+######> Retirando "Dissolved_Molecular_Oxygen", todas as variáveis possuem um fator VIF baixo (menor que 10, que é o usualmente recomendado) 
+vif(env_variables[[c("Ocean_Temperature", "Chlorophyll", "Mixed_Layer_Depth", "Salinity", "Eastward_Velocity", "Northward_Velocity")]])
+```
+
+```{r}
+######> Definindo lista de variáveis a serem usadas no modelo e renomeadas
+variable_list <- c("Ocean_Temperature", "Chlorophyll", "Mixed_Layer_Depth", "Salinity", "Eastward_Velocity", "Northward_Velocity")
+
+######> Visualizando variáveis ambientais escolhidas
+for(variable in variable_list) {
+  terra_plot(env_variables[[variable]], main = paste0(variable, " - Baseline - 2010-2020 (ESCOLHIDO)"))
+}
+```
+
+# 3. PREPARANDO DADOS PARA OS MODELOS
+
+Seguindo o exemplo https://sjevelazco.github.io/flexsdm/
+
+```{r}
+######> Criando diretório para os modelos
+sdm_dir <- paste0("data/modelos/", species_name_formatted, "_", paste(substring(variable_list, 1, 1), collapse=","))
+dir.create(sdm_dir)
+```
+
+## 3.1 Área de calibração
+
+```{r}
+ca <- calib_area(
+  data = occurrences,
+  x = "x",
+  y = "y",
+  method = c("buffer", width = calib_area_width_meters), # em metros 
+  crs = crs(env_variables)
+)
+
+######> Visualizando área de calibração
+plot(
+  world$geometry, col = "white", bg = "skyblue", axes = TRUE, graticule = TRUE, xlab = "Longitude", ylab = "Latitude", cex.lab=1.3,
+  xlim = c(min(occurrences$x), max(occurrences$x)),
+  ylim = c(min(occurrences$y), max(occurrences$y)), 
+  main = paste(species_name, "- Calibration area and occurrences")
+)
+plot(ca, add = TRUE, xpd = TRUE)
+
+points(occurrences[, c("x", "y")], col = "green", pch = 16, xpd = TRUE)
+
+legend(
+  "bottomright", bg = alpha("white", 0.85), xpd = TRUE, pt.cex = 1.6,
+  legend = c("Calibration area", "Occurrences"),
+  col = c("black", "green"),
+  pch = c(1, 16)
+)
+```
+
+## 3.2 Pseudo-ausência
+
+```{r}
+set.seed(random_seed) 
+
+psa <- sample_pseudoabs(
+  data = occurrences,
+  x = "x",
+  y = "y",
+  n = nrow(occurrences), 
+  ######> Selecionando número de pontos de pseudo-ausência igual ao número de presenças
+  method = "random",
+  rlayer = env_variables,
+  calibarea = ca # polígono desejado para a amostragem das pseudo-ausências
+)
+
+######> Unindo dados de presença e ausência, diferenciados por "pr_ab" igual a 1 ou 0
+occurrences_psa <- bind_rows(occurrences, psa)
+str(occurrences_psa)
+table(occurrences_psa$pr_ab)
+
+######> Visualizando pseudo-ausências
+plot(
+  world$geometry, col = "white", bg = "skyblue", axes = TRUE, graticule = TRUE, xlab = "Longitude", ylab = "Latitude", cex.lab=1.3,
+  xlim = c(min(occurrences_psa$x), max(occurrences_psa$x)),
+  ylim = c(min(occurrences_psa$y), max(occurrences_psa$y)), 
+  main = paste(species_name, "- Calibration area, occurrences and pseudo-absences")
+)
+plot(ca, add = TRUE, xpd = TRUE)
+
+points(occurrences_psa[occurrences_psa$pr_ab == 0, c("x", "y")], pch = 16, col=alpha("red", 0.25), xpd = TRUE)
+points(occurrences_psa[occurrences_psa$pr_ab == 1, c("x", "y")], pch = 16, col="green", xpd = TRUE)
+
+legend(
+  "bottomright", bg = alpha("white", 0.85), xpd = TRUE, pt.cex = 1.6,
+  legend = c("Calibration area", "Occurrences", "Pseudo-absences"),
+  col = c("black", "green", alpha("red", 0.25)),
+  pch = c(1, 16, 16)
+)
+```
+
+## 3.3 Dividindo em partições (treinamento e teste)
+
+```{r}
+set.seed(random_seed) 
+
+occurrences_psa_part <- part_random(
+  data = occurrences_psa,
+  pr_ab = "pr_ab",
+  method = c(method = "rep_kfold", folds = 5, replicates = 10)
+)
+str(occurrences_psa_part)
+```
+
+## 3.4 Unindo presença/ausência e ambientais
+
+```{r}
+######> Adicionando id para visualizarmos as ocorrências removidas
+occurrences_psa_part$id <- 1:nrow(occurrences_psa_part)
+
+occurrences_psa_part_env <-
+  sdm_extract(
+    data = occurrences_psa_part,
+    x = "x",
+    y = "y",
+    env_layer = env_variables,
+    variables = variable_list
+  )
+str(occurrences_psa_part_env)
+
+######> Visualizando linhas que foram retiradas
+plot(
+  world$geometry, col = "white", bg = "skyblue", axes = TRUE, graticule = TRUE, xlab = "Longitude", ylab = "Latitude", cex.lab=1.3,
+  xlim = c(min(occurrences_psa$x), max(occurrences_psa$x)),
+  ylim = c(min(occurrences_psa$y), max(occurrences_psa$y)), 
+  main = paste(species_name, "- Occurrences, pseudo-absences and removed occurrences")
+)
+
+points(occurrences_psa_part_env[occurrences_psa_part_env$pr_ab == 0, c("x", "y")], pch = 16, col=alpha("red", 0.25), xpd = TRUE)
+points(occurrences_psa_part_env[occurrences_psa_part_env$pr_ab == 1, c("x", "y")], pch = 16, col="green", xpd = TRUE)
+points(occurrences_psa_part[!(occurrences_psa_part$id %in% occurrences_psa_part_env$id), c("x", "y")], pch = 16, col="blue", xpd = TRUE)
+
+legend(
+  "bottomright", bg = alpha("white", 0.85), xpd = TRUE, pt.cex = 1.6,
+  legend = c("Occurrences", "Pseudo-absences", "Removed occurrences"),
+  col = c("green", alpha("red", 0.25), "blue"),
+  pch = c(16, 16, 16)
+)
+```
+
+## 3.5 Pontos de background
+
+```{r}
+######> Necessário apenas para o modelo Maxent
+######> O método em si é quase equivalente ao sample_pseudoabs, ele usa o 
+######> próprio método, mas aqui irá ser para a área de estudo inteira
+set.seed(random_seed) 
+
+bg <- sample_background(
+  data = occurrences_psa_part_env,
+  x = "x",
+  y = "y",
+  n = nrow(occurrences_psa_part_env),  
+  ######> Selecionando número de pontos de background igual a (número de presenças + pseudo-ausências)
+  method = "random",
+  rlayer = env_variables,
+  calibarea = mask_polygon
+)
+
+######> Visualizando background
+plot(
+  world$geometry, col = "white", bg = "skyblue", axes = TRUE, graticule = TRUE, xlab = "Longitude", ylab = "Latitude", cex.lab=1.3,
+  xlim = c(min(occurrences_psa$x)-2, max(occurrences_psa$x)+2),
+  ylim = c(min(occurrences_psa$y)-2, max(occurrences_psa$y)+2), 
+  main = paste(species_name, "- Occurrences, pseudo-absences and background points")
+)
+
+points(bg[, c("x", "y")], pch = 16, col="blue")
+points(occurrences_psa_part_env[occurrences_psa_part_env$pr_ab == 0, c("x", "y")], pch = 16, col="red", xpd = TRUE)
+points(occurrences_psa_part_env[occurrences_psa_part_env$pr_ab == 1, c("x", "y")], pch = 16, col="green", xpd = TRUE)
+
+legend(
+  "bottomright", bg = alpha("white", 0.85), xpd = TRUE, pt.cex = 1.6,
+  legend = c("Occurrences", "Pseudo-absences", "Background"),
+  col = c("green", "red", "blue"),
+  pch = c(16, 16, 16)
+)
+```
+
+```{r}
+######> Retirando variáveis ambientais
+bg_env <- sdm_extract(
+  data = bg,
+  x = "x",
+  y = "y",
+  env_layer = env_variables,
+  variables = variable_list
+)
+str(bg_env)
+
+######> Calculando partições
+set.seed(random_seed) 
+
+bg_env_part <- part_random(
+  data = bg_env,
+  pr_ab = "pr_ab",
+  method = c(method = "rep_kfold", folds = 5, replicates = 10)
+)
+str(bg_env_part)
+```
+
+# 4. AJUSTANDO OS MODELOS
+
+Os modelos escolhidos como exemplo foram o GLM (Generalized Linear Model), GAM (Generalized Additive Model) e Maxent. Sinta-se a vontade para escolher outros tipos de modelos do `flexsdm`, ou para modificar os parâmetros dos modelos: https://sjevelazco.github.io/flexsdm/reference/index.html
+
+Este próximo bloco irá demorar ~20 minutos para os dados de exemplo, e pode demorar mais dependendo do tamanho dos dados ambientais escolhidos. Por isto é recomendado salvar os modelos após eles serem ajustados (isto é feito no bloco seguinte) para que eles possam ser rapidamente carregados
+
+```{r}
+######> Generalized Linear Model (GLM)
+mglm <-
+  fit_glm(
+    data = occurrences_psa_part_env,
+    response = "pr_ab",
+    predictors = variable_list,
+    partition = ".part",
+    thr = "max_sens_spec"
+    ######> As diferentes métricas (thresholds) são explicadas na página da função
+    ######> https://sjevelazco.github.io/flexsdm/reference/fit_glm.html
+  )
+
+######> Generalized Additive Model (GAM)
+mgam <-
+  fit_gam(
+    data = occurrences_psa_part_env,
+    response = "pr_ab",
+    predictors = variable_list,
+    partition = ".part",
+    thr = "max_sens_spec"
+  )
+
+######> Maxent 
+mmaxent <-
+  fit_max(
+    data = occurrences_psa_part_env,
+    response = "pr_ab",
+    predictors = variable_list,
+    partition = ".part",
+    background = bg_env_part,
+    thr = "max_sens_spec"
+  )
+
+######> Ensemble
+ensemble <- 
+  fit_ensemble(
+    list(mglm, mmaxent, mgam),
+    ens_method = c("mean", "meanw"), # Média e Média ponderada, com base na métrica TSS
+    thr_model = "max_sens_spec",
+    metric = "TSS"
+  )
+```
+
+```{r}
+######> Salvando modelos ajustados
+if(write_files){
+  save(mglm, mgam, mmaxent, ensemble, file=paste0(sdm_dir, "/", species_name_formatted, "_raw_models.RData"))
+}
+```
+
+```{r}
+######> Carregando modelos ajustados (se já salvo)
+load(paste0(sdm_dir, "/", species_name_formatted, "_raw_models.RData")) # -> mglm, mgam, mmaxent, ensemble
+```
+
+## 4.1 Métricas de resultado
+
+```{r}
+######> Métricas gerais
+######> Explicação das métricas: https://sjevelazco.github.io/flexsdm/reference/sdm_eval.html
+merge_df <- sdm_summarize(models = list(mglm, mmaxent, mgam)) # ensemble
+merge_df %>% as.data.frame()
+```
+
+```{r}
+if(write_files){
+  write.csv(merge_df, paste0(sdm_dir, "/", species_name_formatted, "_metrics.csv"))
+}
+```
+
+## 4.2 Curvas ROC
+
+```{r}
+######> Plotando com pacote pROC
+######> Função com parâmetros por padrão
+default_plot_roc <- function(response_vector, predictor, title){
+  plot.roc(
+    response_vector,
+    predictor,
+    main = paste(species_name, "-", title),
+  
+    ######> Parâmetros fixos
+    legacy.axes = FALSE,
+    xlab = "Background - Classified as Potencial Presence (1 - Specificity)",
+    ylab = "Presence - Correctly Classified (Sensitivity)",
+    percent = FALSE,
+    ci = TRUE,
+    auc = TRUE,
+    auc.polygon = TRUE,
+    auc.polygon.col = "lightblue",
+    print.auc = TRUE,
+    grid = FALSE,
+    grid.col = "gray70",
+    cex.axis = 1,
+    cex.lab = 1
+  )
+}
+```
+
+```{r}
+######> GLM
+mglm_roc <- default_plot_roc(
+  mglm$data_ens$pr_ab, 
+  mglm$data_ens$pred,
+  "ROC curve - GLM"
+)
+confidence_interval_mglm_roc <- ci.se(mglm_roc, specificities = seq(0, 1, 0.05))
+plot(confidence_interval_mglm_roc, type = "shape", col = "#1c61b6AA")
+
+######> GAM
+mgam_roc <- default_plot_roc(
+  mgam$data_ens$pr_ab, 
+  mgam$data_ens$pred,
+  "ROC curve - GAM"
+)
+confidence_interval_mgam_roc <- ci.se(mgam_roc, specificities = seq(0, 1, 0.05)) 
+plot(confidence_interval_mgam_roc, type = "shape", col = "#1c61b6AA")
+
+######> Maxent
+mmaxent_roc <- default_plot_roc(
+  mmaxent$data_ens$pr_ab, 
+  mmaxent$data_ens$pred,
+  "ROC curve - Maxent"
+)
+confidence_interval_mmaxent_roc <- ci.se(mmaxent_roc, specificities = seq(0, 1, 0.05)) 
+plot(confidence_interval_mmaxent_roc, type = "shape", col = "#1c61b6AA")
+```
+
+## 4.3 Dependência entre variáveis e adequação
+
+```{r}
+######> "Partial Dependent Plot" mostra a relação entre a variável e o nível previsto de adequabilidade
+######> Função com parâmetros por padrão
+default_plot_partial_dependence <- function(model, title){
+  p_pdp(
+    model = model,
+    training_data = occurrences_psa_part_env,
+    predictors = variable_list,
+  ) + plot_annotation(title = paste(species_name, "-", title), theme = theme(plot.title = element_text(size = 16, face = "bold")))
+}
+```
+
+```{r}
+######> GLM
+default_plot_partial_dependence(mglm$model, "GLM Model Partial Dependence")
+
+######> GAM
+default_plot_partial_dependence(mgam$model, "GAM Model Partial Dependence")
+
+######> Maxent
+default_plot_partial_dependence(mmaxent$model, "Maxent Model Partial Dependence")
+```
+
+## 4.4 Importância de cada variável ambiental para adequação
+
+```{r}
+######> Calculando a pontuação de importância de cada variável ambiental com base em permutações
+vip_t <- sdm_varimp(
+  data = occurrences_psa_part_env,
+  response = "pr_ab",
+  predictors = variable_list,
+  models = list(mglm, mgam, mmaxent),
+  thr = "max_sens_spec",
+  clamp = TRUE
+)
+print(vip_t, n=30)
+```
+
+## 4.5 Outros plots
+
+```{r}
+######> Métrica de extrapolação do modelo, usando a metodologia SHAPE
+extr <-
+  extra_eval(
+    training_data = occurrences_psa_part_env,
+    pr_ab = "pr_ab",
+    projection_data = env_variables[[variable_list]]
+  )
+plot(extr, main = "Model Extrapolation")
+
+######> Exploração dos padrões de extrapolação ou adequabilidade
+p_extra(
+  training_data = occurrences_psa_part_env,
+  x = "x",
+  y = "y",
+  pr_ab = "pr_ab",
+  extra_suit_data = terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_gam.tif")),
+  projection_data = env_variables,
+  predictors = variable_list
+)
+```
+
+# 5. PREDIÇÕES
+
+## 5.1 Variáveis ambientais atuais
+
+```{r}
+######> Fazendo predições dos modelos únicos
+mpred <- sdm_predict(
+  models = list(mglm, mgam, mmaxent),
+  pred = env_variables,
+  con_thr = TRUE,
+  predict_area = env_variables
+)
+
+######> Fazendo predição do ensemble
+ensemble_pred <- sdm_predict(
+  models = ensemble,
+  pred = env_variables,
+  con_thr = TRUE,
+  predict_area = env_variables
+)
+```
+
+```{r}
+######> Plotando predições
+terra_plot(mpred$glm, main = paste(species_name, "- GLM - Baseline - 2010-2020"), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+terra_plot(mpred$gam, main = paste(species_name, "- GAM - Baseline - 2010-2020"), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+terra_plot(mpred$max, main = paste(species_name, "- Maxent - Baseline - 2010-2020"), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+terra_plot(ensemble_pred$mean, main = paste(species_name, "- Ensemble (média) - Baseline - 2010-2020"), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+terra_plot(ensemble_pred$meanw, main = paste(species_name, "- Ensemble (média ponderada) - Baseline - 2010-2020"), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+```
+
+```{r}
+######> Salvando predições
+if(write_files){
+  writeRaster(mpred$glm, paste0(sdm_dir, "/sdm_baseline_2010_2020_glm.tif"), overwrite=TRUE)
+  writeRaster(mpred$gam, paste0(sdm_dir, "/sdm_baseline_2010_2020_gam.tif"), overwrite=TRUE)
+  writeRaster(mpred$max, paste0(sdm_dir, "/sdm_baseline_2010_2020_maxent.tif"), overwrite=TRUE)
+  writeRaster(ensemble_pred$mean, paste0(sdm_dir, "/sdm_baseline_2010_2020_ensemble_mean.tif"), overwrite=TRUE)
+  writeRaster(ensemble_pred$meanw, paste0(sdm_dir, "/sdm_baseline_2010_2020_ensemble_meanw.tif"), overwrite=TRUE)
+}
+```
+
+## 5.2 Variáveis ambientais dos cenários de projeção CMIP6
+
+```{r}
+future_periods <- c("2020_2030", "2090_2100")
+future_scenarios <- c("ssp119", "ssp126", "ssp245", "ssp370", "ssp460", "ssp585")
+ 
+for(period in future_periods) {
+  for(scenario in future_scenarios) {
+    
+    ######> Carregando .tif salvo anteriormente, referente ao perído e cenário
+    env_variables_future <- terra::rast(paste0("data/ambiental/rasters/env_variables_", scenario, "_", period, ".tif"))
+
+    ######> Renomeando variáveis do raster
+    names(env_variables_future) # é para ser igual ao env_variables atual
+    names(env_variables_future) <- all_variables_renamed
+
+    ######> Fazendo predições dos modelos únicos
+    mpred_future <- sdm_predict(
+      models = list(mglm, mgam, mmaxent),
+      pred = env_variables_future,
+      con_thr = TRUE,
+      predict_area = env_variables
+    )
+
+    ######> Fazendo predição do ensemble
+    ensemble_pred_future <- sdm_predict(
+      models = ensemble,
+      pred = env_variables_future,
+      con_thr = TRUE,
+      predict_area = env_variables
+    )
+    
+    ######> Plotando predições
+    terra_plot(mpred_future$glm, main = paste(species_name, "- GLM -", scenario, "-", gsub("_", "-", period)), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+    terra_plot(mpred_future$gam, main = paste(species_name, "- GAM -", scenario, "-", gsub("_", "-", period)), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+    terra_plot(mpred_future$max, main = paste(species_name, "- Maxent -", scenario, "-", gsub("_", "-", period)), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+    terra_plot(ensemble_pred_future$mean, main = paste(species_name, "- Ensemble (média) -", scenario, "-", gsub("_", "-", period)), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+    terra_plot(ensemble_pred_future$meanw, main = paste(species_name, "- Ensemble (média ponderada) -", scenario, "-", gsub("_", "-", period)), unit = "Suitability", range = c(0,1), occ_points = occ_points)
+
+    ######> Salvando predições
+    if(write_files){
+      writeRaster(mpred_future$glm, paste0(sdm_dir, "/sdm_", scenario, "_", period, "_glm.tif"), overwrite=TRUE)
+      writeRaster(mpred_future$gam, paste0(sdm_dir, "/sdm_", scenario, "_", period, "_gam.tif"), overwrite=TRUE)
+      writeRaster(mpred_future$max, paste0(sdm_dir, "/sdm_", scenario, "_", period, "_maxent.tif"), overwrite=TRUE)
+      writeRaster(ensemble_pred_future$mean, paste0(sdm_dir, "/sdm_", scenario, "_", period, "_ensemble_mean.tif"), overwrite=TRUE)
+      writeRaster(ensemble_pred_future$meanw, paste0(sdm_dir, "/sdm_", scenario, "_", period, "_ensemble_meanw.tif"), overwrite=TRUE)  
+    }
+     
+    print(paste0("predições feitas para o cenário ", scenario)) 
+  }
+}
+```
+
+## 5.3 Diferença de adequação entre projeção e cenário atual
+
+```{r}
+######> É necessário que os rasters de predição sejam salvos anteriormente
+######> Subtraindo o raster de predição do futuro, em cada cenário, pelo raster de predição baseline
+color_palette <- colorRampPalette(c("#A70000", "#FF5252", "#FFFFFF", "#4C5FFF", "#1B1E63"))(21) # brewer.pal(10, "RdBu")
+
+for(scenario in future_scenarios) {
+  ######> GLM
+  glm_baseline <- terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_glm.tif"))
+  glm_future <- terra::rast(paste0(sdm_dir, "/sdm_", scenario, "_2090_2100_glm.tif"))
+  glm_diff <- glm_future - glm_baseline
+  terra_plot(glm_diff, main = paste(species_name, "- GLM -", scenario, "- 2010-2020 para 2090-2100"), unit = "Suitability diff", palette = color_palette, continent_color = "gray", range = c(-1, 1))
+
+  ######> GAM
+  gam_baseline <- terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_gam.tif"))
+  gam_future <- terra::rast(paste0(sdm_dir, "/sdm_", scenario, "_2090_2100_gam.tif"))
+  gam_diff <- gam_future - gam_baseline
+  terra_plot(gam_diff, main = paste(species_name, "- GAM -", scenario, "- 2010-2020 para 2090-2100"), unit = "Suitability diff", palette = color_palette, continent_color = "gray", range = c(-1, 1))
+
+  ######> Maxent
+  maxent_baseline <- terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_maxent.tif"))
+  maxent_future <- terra::rast(paste0(sdm_dir, "/sdm_", scenario, "_2090_2100_maxent.tif"))
+  maxent_diff <- maxent_future - maxent_baseline
+  terra_plot(maxent_diff, main = paste(species_name, "- Maxent -", scenario, "- 2010-2020 para 2090-2100"), unit = "Suitability diff", palette = color_palette, continent_color = "gray", range = c(-1, 1))
+
+  ######> Ensemble (Média)
+  ensemble_mean_baseline <- terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_ensemble_mean.tif"))
+  ensemble_mean_future <- terra::rast(paste0(sdm_dir, "/sdm_", scenario, "_2090_2100_ensemble_mean.tif"))
+  ensemble_mean_diff <- ensemble_mean_future - ensemble_mean_baseline
+  terra_plot(ensemble_mean_diff, main = paste(species_name, "- Ensemble -", scenario, "- 2010-2020 para 2090-2100"), unit = "Suitability diff", palette = color_palette, continent_color = "gray", range = c(-1, 1))
+
+  ######> Ensemble (Média ponderada)
+  ensemble_mean_baseline <- terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_ensemble_meanw.tif"))
+  ensemble_mean_future <- terra::rast(paste0(sdm_dir, "/sdm_", scenario, "_2090_2100_ensemble_meanw.tif"))
+  ensemble_mean_diff <- ensemble_mean_future - ensemble_mean_baseline
+  terra_plot(ensemble_mean_diff, main = paste(species_name, "- Ensemble (média ponderada) -", scenario, "- 2010-2020 para 2090-2100"), unit = "Suitability diff", palette = color_palette, continent_color = "gray", range = c(-1, 1))
+}
+```

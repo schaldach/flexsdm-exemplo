@@ -1,0 +1,229 @@
+# Ocorrencias_Tratamento.Rmd
+
+Este código tem a finalidade de organizar os dados de ocorrência da espécie, de qualquer formato de origem (mas geralmente será um .csv) para um .csv padronizado no formato esperado, com as colunas "x" e "y" representando longitude e latitude, respectivamente, e quaisquer outras colunas desejadas. Este .csv final terá o nome de `ocorrencias_{especie}.csv`, que será lido no código dos modelos, mas você poderia modificar se desejar (apenas lembre de modificar o código dos modelos, na Seção 2.1, para ler o arquivo de ocorrências de acordo)
+
+# 1. SETUP
+
+```{r}
+if(!require(pacman)) {
+  install.packages("pacman", dependencies = TRUE);
+}
+library(pacman)
+######> Instalando e carregando pacotes
+p_load(tidyverse, tidyr, terra, viridis, sf, ggplot2, 
+       rnaturalearth, rnaturalearthdata, readxl, openxlsx)
+
+######> Nome da espécie, para plots
+species_name <- "Sardinella brasiliensis"
+```
+
+## 1.1 Polígonos
+
+```{r}
+######> Caminho do arquivo shapefile
+sf_path <- "data/geo/area0_200/area0_200.shp"
+
+######> Carregando polígono da costa brasileira 
+costa_poly <- read_sf(sf_path) 
+st_bbox(costa_poly)
+
+######> Multi-polígono dos continentes 
+world <- ne_countries(scale = "medium", type="countries", returnclass = "sf")
+# plot(world$geom)
+```
+
+# 2. CARREGANDO E TRATANDO DADOS DE OCORRÊNCIA
+
+Você deve adicionar todas as fontes de ocorrência aqui
+
+Os arquivos de ocorrência precisam estar, ao final da transformação, com 2 colunas: "x" (numérico, longitude), e "y" (numérico, latitude)
+
+Aqui, estou adicionando também a coluna "year" (numérico, indicando o ano da ocorrência) que será usada para filtrar as ocorrências, e a coluna "source" (string, identificando qual fonte é aquele arquivo), que será usada para melhor visualizar os dados - e que é altamente recomendado.
+
+Mas você pode mudar esse comportamento à vontade, adicionando ou removendo as colunas que você quiser, apenas lembre-se de modificar o código de acordo (principalmente neste arquivo, nas seções 3. e 4. de integração e filtragem dos dados, mas você também poderia mudar o código dos modelos que realiza a leitura do arquivo de ocorrências).
+
+## 2.1 Fonte 1
+
+```{r}
+######> Carregando arquivo .csv 
+pmap <- read.table("data/ocorrencias/Sardinella_brasiliensis_full.csv", header = TRUE, sep = ";", dec = ",", fileEncoding = "ISO-8859-1") 
+str(pmap)
+```
+
+```{r}
+######> Número de NAs 
+sum(pmap == "", na.rm = TRUE) # número de strings vazias 
+sum(is.na(pmap)) # número de NAs
+
+# pmap[pmap == ""] <- NA # seria necessário caso houvesse strings vazias, iríamos considerar elas como NAs também
+
+na_counts_pmap <- pmap %>% 
+    summarise_all(~ sum(is.na(.))) 
+na_counts_pmap
+
+######> Filtrando NAs 
+nrow(pmap) 
+pmap_filtered <- pmap %>%
+    drop_na(lon, lat, ano) 
+nrow(pmap_filtered)
+```
+
+```{r}
+######> Padronizando colunas 
+pmap_filtered$x <- pmap_filtered$lon
+pmap_filtered$y <- pmap_filtered$lat 
+pmap_filtered$source <- "PMAP"
+pmap_filtered$year <- pmap_filtered$ano
+```
+
+## 2.1 Fonte 2
+
+```{r}
+######> Carregando planilha do Excel 
+excel <- read_excel("data/ocorrencias/DB_Sardinha_LEMA_ver00.xlsx") 
+str(excel)
+
+######> Convertendo coluna de data e verificando extensão temporal 
+excel$Ano <- as.numeric(format(excel$data,'%Y')) 
+excel$data <- as.character(excel$data) 
+table(excel$Ano)
+str(excel) 
+```
+
+```{r}
+######> Número de valores ausentes 
+sum(excel == "", na.rm = TRUE) # número de strings vazias 
+sum(is.na(excel)) # número de NAs
+
+######> Não é necessário filtrar pois não há valores NAs nesta fonte
+```
+
+```{r}
+######> Padronizando colunas 
+excel$x <- excel$longitude 
+excel$y <- excel$latitude 
+excel$source <- "DB_Sardinha"
+excel$year <- excel$Ano
+```
+
+# 3. UNINDO OS DADOS DE TODAS AS FONTES
+
+```{r}
+######> Pegando só as colunas x, y, source e year 
+pmap_filtered <- pmap_filtered[,c("x", "y", "source", "year")] 
+excel_filtered <- excel[,c("x", "y", "source", "year")]
+
+######> Juntando todas as linhas 
+occurrences <- rbind(pmap_filtered, excel_filtered)
+str(occurrences) 
+table(occurrences$source)
+```
+
+```{r}
+######> Verificando se existem dados NAs
+na_counts_occurrences <- occurrences %>% 
+    summarise_all(~ sum(is.na(.))) 
+na_counts_occurrences
+```
+
+```{r}
+######> Plotando ocorrências não filtradas 
+ggplot() + 
+    ggtitle(paste(species_name, "- Ocorrências globais, antes de serem filtradas")) + 
+    geom_sf(data = world) + 
+    geom_point(data = occurrences, mapping = aes(x = x, y = y, colour = source)) + 
+    geom_sf(data = costa_poly, fill = NA, color = "yellow", linewidth = 1) + 
+    coord_sf(xlim = c(min(occurrences$x), max(occurrences$x)), ylim = c(min(occurrences$y), max(occurrences$y))) + 
+    theme(panel.background = element_rect(fill = "lightblue", colour = "white", linetype = "solid"), legend.position = "inside", legend.position.inside = c(0.9,0.2)) + labs(color = "Legenda")
+```
+
+# 4. FILTRANDO OCORRÊNCIAS
+
+Sinta-se a vontade para adicionar ou remover filtros conforme desejar. Apenas certifique-se de que as colunas necessárias foram integradas na seção anterior
+
+## 4.1 Por duplicatas
+
+```{r}
+######> Retirando linhas que possuem x e y iguais 
+######> Seria uma possibilidade também considerar a data ou coordenadas apenas 
+######> próximas mas não iguais, mas não será feito por enquanto 
+occurrences <- occurrences %>% 
+    distinct(x, y, .keep_all = TRUE)
+
+str(occurrences) 
+table(occurrences$source)
+```
+
+## 4.2 Pela área de estudo
+
+```{r}
+######> Transformar em "sf" para que seja possível fazer a operação espacial 
+occurrences_sf <- st_as_sf(occurrences, coords = c("x", "y"), crs = 4326, remove=FALSE)
+
+######> Selecionando apenas linhas que possuem interseção com o polígono 
+occurrences_sf <- occurrences_sf[st_intersects(occurrences_sf, costa_poly, sparse = FALSE), ]
+
+######> Transformar em dataframe novamente 
+occurrences <- as.data.frame(occurrences_sf)[,c("x", "y", "source", "year")]
+
+str(occurrences) 
+table(occurrences$source)
+```
+
+## 4.3 Pela sobreposição com continente
+
+```{r}
+######> Transformar em "sf" 
+occurrences_sf <- st_as_sf(occurrences, coords = c("x", "y"), crs = 4326, remove=FALSE)
+
+######> Pegando apenas ocorrências que não estão dentro do continente 
+intersections <- st_intersects(occurrences_sf, world) 
+######> Sem o sparse=FALSE, será retornada uma lista de 
+######> interseções para cada linha (pois é um multi-polígono) 
+occurrences_sf <- occurrences_sf[lengths(intersections) == 0, ]
+
+######> Transformar em dataframe novamente 
+occurrences <- as.data.frame(occurrences_sf)[,c("x", "y", "source", "year")]
+
+str(occurrences)
+table(occurrences$source)
+```
+
+## 4.4 Pelo ano
+
+```{r}
+######> Apenas os anos de 2006 a 2022 
+occurrences <- occurrences[occurrences$year >= 2006 & occurrences$year <= 2022, ]
+
+str(occurrences) 
+table(occurrences$source)
+```
+
+## 4.5 Pela latitude
+
+```{r}
+###### Não tem necessidade pra Sardinella, pois o polígono já está dentro desse range de latitude 
+######> Mas é bom para garantir, é para nenhum dado ser filtrado aqui, se está tudo certo
+occurrences <- occurrences[occurrences$y <= 0 & occurrences$y >= -60, ]
+
+str(occurrences) 
+table(occurrences$source)
+```
+
+# 5. SALVANDO E VISUALIZANDO DADOS
+
+```{r}
+str(occurrences)
+
+######> Plotando ocorrências filtradas 
+ggplot() + 
+    ggtitle(paste(species_name, "- Ocorrências filtradas")) + 
+    geom_sf(data = world) + 
+    geom_point(data = occurrences, mapping = aes(x = x, y = y, colour = source)) + 
+    geom_sf(data = costa_poly, fill = NA, color = "yellow", linewidth = 1) + 
+    coord_sf(xlim = st_bbox(costa_poly)[c("xmin", "xmax")], ylim = st_bbox(costa_poly)[c("ymin", "ymax")]) + 
+    theme(panel.background = element_rect(fill = "lightblue", colour = "white", linetype = "solid"), legend.position = "inside", legend.position.inside = c(0.9,0.2)) + labs(color = "Legenda")
+
+######> Salvando os dados num .csv, que será usado pelo arquivo dos Modelos
+write.csv(occurrences, file="data/ocorrencias/occurrences_sardinella.csv", row.names=FALSE)
+```
