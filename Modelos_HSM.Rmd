@@ -193,6 +193,8 @@ dir.create(sdm_dir)
 
 ## 3.1 Área de calibração
 
+A área de calibração servirá para delimitar onde as pseudo-ausências serão amostradas. Aqui, ela é construída como um buffer de tamanho fixo (definido na seção de variáveis) ao redor dos dados de ocorrência.
+
 ```{r}
 ca <- calib_area(
   data = occurrences,
@@ -222,6 +224,8 @@ legend(
 ```
 
 ## 3.2 Pseudo-ausência
+
+As pseudo-ausências são necessárias para os modelos, em vista que os modelos precisam tanto de dados de ocorrência como ausência, e os dados de ausência são muito mais custosos de capturar do que dados de presença - por isso, existem tão poucos recordados. Assim, a prática mais comum é amostrar pseudo-ausências para os modelos serem ajustados.
 
 ```{r}
 set.seed(random_seed) 
@@ -263,6 +267,8 @@ legend(
 ```
 
 ## 3.3 Dividindo em partições (treinamento e teste)
+
+Dividindo os dados em partições de treinamento e teste - ao todo, o processo será replicado 10 vezes, e em cada uma o modelo será ajustado 5 vezes, separando cada uma das 5 partições como dados de teste e validação, a cada vez.
 
 ```{r}
 set.seed(random_seed) 
@@ -313,10 +319,11 @@ legend(
 
 ## 3.5 Pontos de background
 
+Necessário apenas para o modelo Maxent
+
+O método em si é equivalente ao sample_pseudoabs, mas aqui irá ser para a área de estudo inteira
+
 ```{r}
-######> Necessário apenas para o modelo Maxent
-######> O método em si é quase equivalente ao sample_pseudoabs, ele usa o 
-######> próprio método, mas aqui irá ser para a área de estudo inteira
 set.seed(random_seed) 
 
 bg <- sample_background(
@@ -387,7 +394,7 @@ mglm <-
     predictors = variable_list,
     partition = ".part",
     thr = "max_sens_spec"
-    ######> As diferentes métricas (thresholds) são explicadas na página da função
+    ######> Os diferentes thresholds são explicados na página da função
     ######> https://sjevelazco.github.io/flexsdm/reference/fit_glm.html
   )
 
@@ -436,9 +443,10 @@ load(paste0(sdm_dir, "/", species_name_formatted, "_raw_models.RData")) # -> mgl
 
 ## 4.1 Métricas de resultado
 
+Explicação das métricas: https://sjevelazco.github.io/flexsdm/reference/sdm_eval.html
+
 ```{r}
 ######> Métricas gerais
-######> Explicação das métricas: https://sjevelazco.github.io/flexsdm/reference/sdm_eval.html
 merge_df <- sdm_summarize(models = list(mglm, mmaxent, mgam)) # ensemble
 merge_df %>% as.data.frame()
 ```
@@ -509,8 +517,9 @@ plot(confidence_interval_mmaxent_roc, type = "shape", col = "#1c61b6AA")
 
 ## 4.3 Dependência entre variáveis e adequação
 
+"Partial Dependent Plot" mostra a relação entre a variável e o nível previsto de adequabilidade
+
 ```{r}
-######> "Partial Dependent Plot" mostra a relação entre a variável e o nível previsto de adequabilidade
 ######> Função com parâmetros por padrão
 default_plot_partial_dependence <- function(model, title){
   p_pdp(
@@ -534,8 +543,9 @@ default_plot_partial_dependence(mmaxent$model, "Maxent Model Partial Dependence"
 
 ## 4.4 Importância de cada variável ambiental para adequação
 
+Calculando a pontuação de importância de cada variável ambiental com base em permutações
+
 ```{r}
-######> Calculando a pontuação de importância de cada variável ambiental com base em permutações
 vip_t <- sdm_varimp(
   data = occurrences_psa_part_env,
   response = "pr_ab",
@@ -573,7 +583,11 @@ p_extra(
 
 # 5. PREDIÇÕES
 
+Com os modelos ajustados, podemos usar os rasters inteiros de variáveis ambientais para fazer as predições: Usando o valor das variáveis ambientais de cada célula, criamos um novo raster com o valor predito dos modelos para cada célula.
+
 ## 5.1 Variáveis ambientais atuais
+
+Usando as variáveis ambientais atuais, estamos modelando a distribuição atual da espécie
 
 ```{r}
 ######> Fazendo predições dos modelos únicos
@@ -614,6 +628,8 @@ if(write_files){
 ```
 
 ## 5.2 Variáveis ambientais dos cenários de projeção CMIP6
+
+E também podemos usar as variáveis ambientais projetadas para os cenários das mudanças climáticas para investigar como a distribuição da espécie seria afetada no futuro.
 
 ```{r}
 future_periods <- c("2020_2030", "2090_2100")
