@@ -376,7 +376,7 @@ str(bg_env_part)
 
 Os modelos escolhidos como exemplo foram o GLM (Generalized Linear Model), GAM (Generalized Additive Model) e Maxent. Sinta-se a vontade para escolher outros tipos de modelos do `flexsdm`, ou para modificar os parâmetros dos modelos: https://sjevelazco.github.io/flexsdm/reference/index.html
 
-Este próximo bloco irá demorar ~20 minutos para os dados de exemplo, e pode demorar mais dependendo do tamanho dos dados ambientais escolhidos. Por isto é recomendado salvar os modelos após eles serem ajustados (isto é feito no bloco seguinte) para que eles possam ser rapidamente carregados
+Este próximo bloco irá demorar ~20 minutos para os dados de exemplo, e pode demorar mais dependendo do tamanho dos dados ambientais escolhidos. Por isto é recomendado salvar os modelos após eles serem ajustados (isto é feito no bloco seguinte) para que eles possam ser rapidamente carregados.
 
 ```{r}
 ######> Generalized Linear Model (GLM)

@@ -2,6 +2,8 @@
 
 Esse repositório é um exemplo comentado de uso do pacote `flexsdm` para a construção de Modelos de Adequação de Habitat (HSM), incluindo todas as instruções necessárias para você organizar os seus dados no formato correto que será usado para construir os modelos. 
 
+Sinta-se a vontade para modificar o código como quiser, o código presente é para ser visto como apenas um exemplo, do começo ao fim.
+
 Aqui estão as principais etapas:
 
 ### 1. Organizar os dados geográficos
