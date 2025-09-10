@@ -46,34 +46,34 @@ Mas você pode mudar esse comportamento à vontade, adicionando ou removendo as 
 
 ```{r}
 ######> Carregando arquivo .csv 
-pmap <- read.table("data/ocorrencias/Sardinella_brasiliensis_full.csv", header = TRUE, sep = ";", dec = ",", fileEncoding = "ISO-8859-1") 
-str(pmap)
+csv <- read.table("data/ocorrencias/Sardinella_brasiliensis_full.csv", header = TRUE, sep = ";", dec = ",", fileEncoding = "ISO-8859-1") 
+str(csv)
 ```
 
 ```{r}
 ######> Número de NAs 
-sum(pmap == "", na.rm = TRUE) # número de strings vazias 
-sum(is.na(pmap)) # número de NAs
+sum(csv == "", na.rm = TRUE) # número de strings vazias 
+sum(is.na(csv)) # número de NAs
 
-# pmap[pmap == ""] <- NA # seria necessário caso houvesse strings vazias, iríamos considerar elas como NAs também
+# csv[csv == ""] <- NA # seria necessário caso houvesse strings vazias, iríamos considerar elas como NAs também
 
-na_counts_pmap <- pmap %>% 
+na_counts_csv <- csv %>% 
     summarise_all(~ sum(is.na(.))) 
-na_counts_pmap
+na_counts_csv
 
 ######> Filtrando NAs 
-nrow(pmap) 
-pmap_filtered <- pmap %>%
+nrow(csv) 
+csv_filtered <- csv %>%
     drop_na(lon, lat, ano) 
-nrow(pmap_filtered)
+nrow(csv_filtered)
 ```
 
 ```{r}
 ######> Padronizando colunas 
-pmap_filtered$x <- pmap_filtered$lon
-pmap_filtered$y <- pmap_filtered$lat 
-pmap_filtered$source <- "PMAP"
-pmap_filtered$year <- pmap_filtered$ano
+csv_filtered$x <- csv_filtered$lon
+csv_filtered$y <- csv_filtered$lat 
+csv_filtered$source <- "csv"
+csv_filtered$year <- csv_filtered$ano
 ```
 
 ## 2.1 Fonte 2
@@ -110,11 +110,11 @@ excel$year <- excel$Ano
 
 ```{r}
 ######> Pegando só as colunas x, y, source e year 
-pmap_filtered <- pmap_filtered[,c("x", "y", "source", "year")] 
+csv_filtered <- csv_filtered[,c("x", "y", "source", "year")] 
 excel_filtered <- excel[,c("x", "y", "source", "year")]
 
 ######> Juntando todas as linhas 
-occurrences <- rbind(pmap_filtered, excel_filtered)
+occurrences <- rbind(csv_filtered, excel_filtered)
 str(occurrences) 
 table(occurrences$source)
 ```
@@ -202,7 +202,7 @@ table(occurrences$source)
 ## 4.5 Pela latitude
 
 ```{r}
-###### Não tem necessidade pra Sardinella, pois o polígono já está dentro desse range de latitude 
+###### Não tem necessidade, pois o polígono já está dentro desse range de latitude 
 ######> Mas é bom para garantir, é para nenhum dado ser filtrado aqui, se está tudo certo
 occurrences <- occurrences[occurrences$y <= 0 & occurrences$y >= -60, ]
 
@@ -224,6 +224,6 @@ ggplot() +
     coord_sf(xlim = st_bbox(costa_poly)[c("xmin", "xmax")], ylim = st_bbox(costa_poly)[c("ymin", "ymax")]) + 
     theme(panel.background = element_rect(fill = "lightblue", colour = "white", linetype = "solid"), legend.position = "inside", legend.position.inside = c(0.9,0.2)) + labs(color = "Legenda")
 
-######> Salvando os dados num .csv, que será usado pelo arquivo dos Modelos
+######> Salvando os dados num .csv, que será usado pelo arquivo dos modelos
 write.csv(occurrences, file="data/ocorrencias/occurrences_sardinella.csv", row.names=FALSE)
 ```

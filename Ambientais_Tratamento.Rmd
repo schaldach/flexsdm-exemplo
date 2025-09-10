@@ -1,14 +1,14 @@
 # Ambientais_Tratamento.Rmd
 
-Este código não é obrigatório caso você já tenha um arquivo .tif com todas as variáveis ambientais que serão usadas para os Modelos de Adequação de Habitat. O objetivo dele é ajudar a você organizar os dados ambientais no padrão esperado pelo código dos Modelos.
+Este código não é obrigatório caso você já tenha um arquivo .tif com todas as variáveis ambientais que serão usadas para os Modelos de Adequação de Habitat, organizados por cenário e período temporal. O objetivo dele é ajudar a você organizar os dados ambientais no padrão esperado pelo código dos modelos.
 
 É preciso que exista um .tif para cada período e cenário que será usado para predição, cada um contendo todas as variáveis ambientais necessárias.
 
-No exemplo utilizado, foram considerados os períodos de 2020-2030 e 2090-2100 (uma vez que os dados ambientais retirados do Bio-Oracle possuem resolução temporal por década) e os 6 cenários disponíveis do CMIP6: SSP1-1.9 (mais otimista), SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP4-6.0, e SSP5-8.5 (mais pessimista). Mas para usar outros cenários ou outros períodos, bastaria trocar as variáveis que identificam cada cenário ou período no código dos Modelos, nas seções 2.2 (que lê o arquivo de variáveis ambientais no cenário atual) e 5.2 (que lê os arquivos de variáveis ambientais nos cenários futuros, para fazer as predições)
+No exemplo utilizado, foram considerados os períodos de 2020-2030 e 2090-2100 (uma vez que os dados ambientais retirados do Bio-Oracle possuem resolução temporal por década) e os 6 cenários disponíveis do CMIP6: SSP1-1.9 (mais otimista), SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP4-6.0, e SSP5-8.5 (mais pessimista). Mas para usar outros cenários ou outros períodos, bastaria trocar as variáveis que identificam cada cenário ou período no código dos Modelos, nas seções 2.2 (que lê o arquivo de variáveis ambientais no cenário atual) e 5.2 (que lê os arquivos de variáveis ambientais nos cenários futuros, para fazer as predições), ou modificar o código de acordo com o padrão que você deseja
 
 Desta forma, foram criados, além do arquivo .tif que representa as variáveis ambientais no cenário baseline (isto é, no período atual, para o qual os modelos serão ajustados com os dados de ocorrência), 12 arquivos .tif para cada combinação de período e cenário. Os arquivos .tif foram nomeados seguindo mesmo padrão, para que o código dos modelos consiga ler os arquivos em um único loop: `env_variables_{cenário}_{período}.tif`
 
-Então é recomendando que você organize-os da mesma forma. Caso deseje fazer modificações, não esqueça de modificar o código dos Modelos de acordo, principalmente as seções 2.2 e 5.2. Você também poderia usar qualquer outro padrão de arquivo, como .nc (NetCDF).
+Então é recomendando que você organize-os da mesma forma. Caso deseje fazer modificações, não esqueça de modificar o código dos modelos de acordo, principalmente as seções 2.2 e 5.2. Você também poderia usar qualquer outro padrão de arquivo, como .nc (NetCDF).
 
 Os arquivos .tif não precisam estar cortados para a área de estudo, pois esse processo será feito no próprio código dos Modelos.
 
@@ -42,7 +42,7 @@ terra::plot(env_raster[[1]])
 
 # 3. ORGANIZANDO DADOS AMBIENTAIS
 
-É extremamente importante entender como o arquivo foi organizado, pois isto será diferente dependendo da fonte que você usar. Neste exemplo, foi um organizado um arquivo onde o nome da layer segue o formato: `{variável}_{número do período}_{cenário}`. Então agruparemos todas as layers que se referem ao mesmo período e cenário e salvaremos em um arquivo separado. **Você deve fazer essa organização de acordo com a estruturua da sua fonte de variáveis ambientais, isto é apenas um exemplo**.
+É extremamente importante entender como o arquivo foi organizado, pois isto será diferente dependendo da fonte que você usar. Neste exemplo, foi usado um arquivo onde o nome da layer segue o formato: `{variável}_{número do período}_{cenário}`. Então agruparemos todas as layers que se referem ao mesmo período e cenário e salvaremos em um arquivo separado. **Você deve fazer essa organização de acordo com a estruturua da sua fonte de variáveis ambientais, isto é apenas um exemplo**.
 
 ```{r}
 ######> Agrupando as layers de mesmo período e variável, e salvando cada grupo em uma arquivo .tif separado
@@ -55,13 +55,15 @@ terra::writeRaster(baseline_raster, "data/ambientais/env_variables_baseline_2010
 future_periods <- c("2020_2030", "2090_2100")
 future_scenarios <- c("ssp119", "ssp126", "ssp245", "ssp370", "ssp460", "ssp585")
 
+######> Salvaremos um raster para cada combinação de cenário e período
 for(i in seq_along(future_periods)) {
   period <- future_periods[i]
   
   for(scenario in future_scenarios) {    
-    ######> Salvaremos um raster para cada combinação de cenário e período
+    ######> Identificando quais nomes de layers contém essa string e filtrando as layers
     scenario_period_layers <- grepl(paste0(i+1, "_", scenario), names(env_raster))
     scenario_period_raster <- env_raster[[scenario_period_layers]]
+    
     terra::writeRaster(scenario_period_raster, paste0("data/ambientais/env_variables_", scenario, "_", period, ".tif"), overwrite=TRUE)
   }
 }

@@ -12,7 +12,7 @@ if(!require(pacman)) {
 }
 library(pacman)
 ######> Instalando e carregando pacotes
-p_load(terra, sf, tidyr, dplyr, remotes, viridis, ggcorrplot, RColorBrewer, leaflet,
+p_load(terra, sf, tidyr, dplyr, remotes, viridis, ggcorrplot, RColorBrewer, leaflet, hnp,
        rnaturalearth, rnaturalearthdata, usdm, scales, ggplot2, tidyterra, pROC, patchwork)
 
 ######> Instalando biblioteca do github
@@ -20,6 +20,7 @@ remotes::install_github("sjevelazco/flexsdm")
 library(flexsdm)
 
 ######> Lembre-se de executar, antes, os scripts necessários
+######> para os dados de ocorrência da espécie e variáveis ambientais
 # source("Ocorrencias_Tratamento.R")
 # source("Ambientais_Tratamento.R") 
 ```
@@ -268,7 +269,7 @@ legend(
 
 ## 3.3 Dividindo em partições (treinamento e teste)
 
-Dividindo os dados em partições de treinamento e teste - ao todo, o processo será replicado 10 vezes, e em cada uma o modelo será ajustado 5 vezes, separando cada uma das 5 partições como dados de teste e validação, a cada vez.
+Dividindo os dados em partições de treinamento e teste - ao todo, o processo será replicado 10 vezes, e em cada uma o modelo será ajustado 5 vezes, separando cada uma das 5 partições para a validação, a cada vez.
 
 ```{r}
 set.seed(random_seed) 
@@ -321,7 +322,7 @@ legend(
 
 Necessário apenas para o modelo Maxent
 
-O método em si é equivalente ao sample_pseudoabs, mas aqui irá ser para a área de estudo inteira
+O método em si é equivalente ao `sample_pseudoabs`, mas aqui irá ser para a área de estudo inteira
 
 ```{r}
 set.seed(random_seed) 
@@ -457,7 +458,49 @@ if(write_files){
 }
 ```
 
-## 4.2 Curvas ROC
+## 4.2 Visão geral dos modelos
+
+Visualizando o retorno de cada modelo
+
+```{r}
+print(mglm$model)
+```
+
+```{r}
+print(mgam$model)
+```
+
+```{r}
+print(mgbm$model)
+```
+
+```{r}
+print(mraf$model)
+```
+
+```{r}
+print(mmaxent$model)
+```
+
+## 4.3 Resíduos dos modelos
+
+Apenas o GLM e GAM podem ser avaliados desta forma
+
+```{r}
+######> GLM
+plot(residuals(mglm$model))
+hist(residuals(mglm$model))
+hnp::hnp(mglm$model)
+
+######> GAM
+plot(residuals(mgam$model))
+hist(residuals(mgam$model))
+# hnp::hnp(mgam$model) # O GAM não funciona
+
+######> Nenhuma das funções funciona para o Maxent
+```
+
+## 4.4 Curvas ROC
 
 ```{r}
 ######> Plotando com pacote pROC
@@ -515,7 +558,7 @@ confidence_interval_mmaxent_roc <- ci.se(mmaxent_roc, specificities = seq(0, 1, 
 plot(confidence_interval_mmaxent_roc, type = "shape", col = "#1c61b6AA")
 ```
 
-## 4.3 Dependência entre variáveis e adequação
+## 4.5 Dependência entre variáveis e adequação
 
 "Partial Dependent Plot" mostra a relação entre a variável e o nível previsto de adequabilidade
 
@@ -541,9 +584,11 @@ default_plot_partial_dependence(mgam$model, "GAM Model Partial Dependence")
 default_plot_partial_dependence(mmaxent$model, "Maxent Model Partial Dependence")
 ```
 
-## 4.4 Importância de cada variável ambiental para adequação
+## 4.6 Importância de cada variável ambiental para adequação
 
 Calculando a pontuação de importância de cada variável ambiental com base em permutações
+
+Esse método pode demorar ~20 minutos
 
 ```{r}
 vip_t <- sdm_varimp(
@@ -555,30 +600,6 @@ vip_t <- sdm_varimp(
   clamp = TRUE
 )
 print(vip_t, n=30)
-```
-
-## 4.5 Outros plots
-
-```{r}
-######> Métrica de extrapolação do modelo, usando a metodologia SHAPE
-extr <-
-  extra_eval(
-    training_data = occurrences_psa_part_env,
-    pr_ab = "pr_ab",
-    projection_data = env_variables[[variable_list]]
-  )
-plot(extr, main = "Model Extrapolation")
-
-######> Exploração dos padrões de extrapolação ou adequabilidade
-p_extra(
-  training_data = occurrences_psa_part_env,
-  x = "x",
-  y = "y",
-  pr_ab = "pr_ab",
-  extra_suit_data = terra::rast(paste0(sdm_dir, "/sdm_baseline_2010_2020_gam.tif")),
-  projection_data = env_variables,
-  predictors = variable_list
-)
 ```
 
 # 5. PREDIÇÕES
@@ -684,9 +705,12 @@ for(period in future_periods) {
 
 ## 5.3 Diferença de adequação entre projeção e cenário atual
 
+Subtraindo o raster de predição do futuro, em cada cenário, pelo raster de predição baseline
+
+O resultado disso será um raster, com os valores de -1 a 1, representando as áreas de ganho de adequabilidade (valores positivos) e perdas de adequabilidade (valores negativos)
+
 ```{r}
 ######> É necessário que os rasters de predição sejam salvos anteriormente
-######> Subtraindo o raster de predição do futuro, em cada cenário, pelo raster de predição baseline
 color_palette <- colorRampPalette(c("#A70000", "#FF5252", "#FFFFFF", "#4C5FFF", "#1B1E63"))(21) # brewer.pal(10, "RdBu")
 
 for(scenario in future_scenarios) {
