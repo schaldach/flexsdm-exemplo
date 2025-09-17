@@ -40,7 +40,7 @@ poly_coords <- list(cbind(longitudes, latitudes))
 ######> Construindo o polígono com a projeção espacial padrão "4326"
 atlc_sudoeste_poly <- st_sfc(st_polygon(poly_coords), crs = 4326)
 
-######> Salvando o polígono
+######> Salvando o polígono, que será lido posteriormente com `read_sf()`
 dir_name <- "data/geo/atlantico_sudoeste"
 dir.create(dir_name)
 st_write(atlc_sudoeste_poly, paste0(dir_name, "/atlc_sudoeste.shp"))
